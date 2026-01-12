@@ -1,0 +1,51 @@
+1. python software used to read pcap files:
+- analyze data
+- keep the data in elastic search
+- forward metrics to prometheus
+
+
+the steps:
+== extraction of data ==
+1. the program will be ran as cli + file name / or / the file will be a variable within the code
+2. it will extract data >
+    - timestamp
+    - src_ip
+    - dst_ip
+    - src_port
+    - dst_port
+    - l4 protocols ( tcp / udp / icmp / other )
+    - packet lenth
+    *** if packet dont have tcp / udp - get all the data possible ***
+== writing the data to elastic search ==
+3. each packet will be saved as index_pcap / date_pcap / etc
+4. the connection to the elastic will be with variables:
+- elastic_url
+- elastic_index
+- elastic_username
+- elastic_password
+5. if data fail to write to the elastic:
+    - perform "retry"
+    - get a clear log message regarding the packet / data that was not written to the elastic server
+=== prometheus data ==
+    - all the metrics must be in http format
+    - will be sent over port 9100 ( default ) ENV: METRIC_PORT
+    - the minimum metrics are:
+        - pcap packet total
+        - pcap bytes total
+        - pcap elastic write total
+        - *** add additional relevant metrics *** -
+
+
+how to present the assignment:
+- GIT repository url
+- README.md file that includes:
+    - how-to
+    - example pcap file
+    - variables needed ( configuration file?? )
+    - example document that will be sent to elastic
+    - how to check the endpoint metrics ?? - wtf??
+    - BULk > WTF??
+
+BONUS:
+docker-compose with kibana+elastic + script / software
+
