@@ -1,74 +1,66 @@
 import sys
 import argparse
-from scapy.all import PcapReader, IP, IPv6, TCP, UDP, ICMP
+from datetime import datetime
+from scapy.all import PcapReader, IP, IPv6, TCP, UDP, ICMP, ARP, SCTP
 
 
-def get_protocol_name(pkt, ip_layer):
-    """Determine human-readable protocol name."""
-    if TCP in pkt: return "TCP"
-    if UDP in pkt: return "UDP"
-    if ICMP in pkt: return "ICMP"
+def get_packet_details(pkt):
+    """Extracts addresses, protocols, and ports for IP or ARP packets."""
+    src_ip, dst_ip, proto, sport, dport = "-", "-", "Other", "-", "-"
 
-    # Handle protocol number fallback for IP and IPv6
-    proto_num = getattr(ip_layer, 'proto', getattr(ip_layer, 'nh', "??"))
-    return f"P-{proto_num}"
+    # 1. Handle IP/IPv6 Traffic
+    if pkt.haslayer(IP) or pkt.haslayer(IPv6):
+        ip_layer = pkt.getlayer(IP) or pkt.getlayer(IPv6)
+        src_ip, dst_ip = ip_layer.src, ip_layer.dst
 
+        if pkt.haslayer(TCP):
+            proto, sport, dport = "TCP", pkt[TCP].sport, pkt[TCP].dport
+        elif pkt.haslayer(UDP):
+            proto, sport, dport = "UDP", pkt[UDP].sport, pkt[UDP].dport
+        elif pkt.haslayer(ICMP):
+            proto = "ICMP"
+        elif pkt.haslayer(SCTP):
+            proto, sport, dport = "SCTP", pkt[SCTP].sport, pkt[SCTP].dport
 
-def get_ports(pkt):
-    """Return source and destination ports or '-' if not TCP/UDP."""
-    layer = pkt.getlayer(TCP) or pkt.getlayer(UDP)
-    if layer:
-        return layer.sport, layer.dport
-    return "-", "-"
+    # 2. Handle ARP Traffic (Layer 2)
+    elif pkt.haslayer(ARP):
+        arp_layer = pkt[ARP]
+        src_ip = arp_layer.psrc  # Sender Protocol Address (IP)
+        dst_ip = arp_layer.pdst  # Target Protocol Address (IP)
+        # ARP Opcode 1 is 'who-has' (request), 2 is 'is-at' (reply)
+        proto = f"ARP ({'Req' if arp_layer.op == 1 else 'Reply'})"
+        sport = arp_layer.hwsrc  # Extra info: Sender MAC in SPort column
+        dport = arp_layer.hwdst  # Extra info: Target MAC in DPort column
+
+    return src_ip, dst_ip, proto, sport, dport
 
 
 def analyze_pcap(file_path):
-    """Processes packets one-by-one to ensure low memory footprint."""
-    header = f"{'#':>5} | {'Src IP':<25} | {'Dst IP':<25} | {'Proto':<8} | {'Len':<6} | {'SPort':<6} | {'DPort':<6}"
-    print(f"\nAnalyzing: {file_path}")
-    print("-" * len(header))
+    # Professional Header Structure as requested
+    header = f"{'#':>4} | {'Timestamp':<24} | {'Src IP':<25} | {'Dst IP':<25} | {'Proto':<10} | {'Len':<6} | {'SPort':<18} | {'DPort':<18}"
     print(header)
     print("-" * len(header))
 
-    total_pkts = 0
-    ip_pkts = 0
-
     try:
-        # PcapReader is the professional choice for large files in 2026
         with PcapReader(file_path) as pcap_stream:
             for idx, pkt in enumerate(pcap_stream, start=1):
-                total_pkts += 1
+                # Only process IP or ARP packets
+                if not (pkt.haslayer(IP) or pkt.haslayer(IPv6) or pkt.haslayer(ARP)):
+                    continue
 
-                # Check for IP or IPv6 layers
-                ip_layer = pkt.getlayer(IP) or pkt.getlayer(IPv6)
+                ts = datetime.fromtimestamp(float(pkt.time)).strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+                length = getattr(pkt, 'wirelen', len(pkt))
+                src, dst, proto, sport, dport = get_packet_details(pkt)
 
-                if ip_layer:
-                    ip_pkts += 1
-                    # wirelen is the actual size captured on the cable
-                    length = getattr(pkt, 'wirelen', len(pkt))
-                    proto = get_protocol_name(pkt, ip_layer)
-                    sport, dport = get_ports(pkt)
+                print(f"{idx:>4} | {ts:<24} | {src:<25} | {dst:<25} | "
+                      f"{proto:<10} | {length:<6} | {str(sport):<18} | {str(dport):<18}")
 
-                    print(f"{idx:>5} | {ip_layer.src:<25} | {ip_layer.dst:<25} | "
-                          f"{proto:<8} | {length:<6} | {sport:<6} | {dport:<6}")
-
-        print("-" * len(header))
-        print(f"Summary: {ip_pkts} IP packets identified out of {total_pkts} total.")
-
-    except FileNotFoundError:
-        print(f"Error: The file '{file_path}' does not exist.")
     except Exception as e:
-        print(f"Analysis Error: {e}")
+        print(f"Error: {e}")
 
 
 if __name__ == "__main__":
-    # Use argparse for better CLI experience (standard for 2026 tools)
-    parser = argparse.ArgumentParser(description="Professional PCAP IP/Port Analyzer")
-    parser.add_argument("file", help="Path to the PCAP file")
-
-    if len(sys.argv) < 2:
-        parser.print_help()
-        sys.exit(1)
-
+    parser = argparse.ArgumentParser(description="Professional PCAP Analyzer (IP & ARP)")
+    parser.add_argument("file", help="Input .pcap file")
     args = parser.parse_args()
     analyze_pcap(args.file)
