@@ -49,3 +49,20 @@ how to present the assignment:
 BONUS:
 docker-compose with kibana+elastic + script / software
 
+
+
+
+
+how to upload / test elastic server:
+
+== in terminal type:
+docker run -p 9200:9200 -d --name es-simulator \
+  -e "discovery.type=single-node" \
+  -e "xpack.security.enabled=false" \
+  -e "xpack.license.self_generated.type=trial" \
+  docker.elastic.co/elasticsearch/elasticsearch:9.2.3
+
+== perform the testing in the code
+
+
+
