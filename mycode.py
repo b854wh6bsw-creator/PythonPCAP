@@ -1,110 +1,117 @@
-import sys
 import os
+import sys
 import json
-import logging
+import time
 import argparse
 from datetime import datetime
 from scapy.all import PcapReader, IP, IPv6, TCP, UDP, ICMP, ARP, SCTP
-from elasticsearch import Elasticsearch, helpers
-from elasticsearch.exceptions import ConnectionError, ApiError
+from elasticsearch import Elasticsearch
+from prometheus_client import start_http_server, Counter, Gauge, Histogram
 
-# --- Configuration ---
-# In 2026, using environment variables is the standard for secure connection management
+# --- Configuration & Environment ---
 ELASTIC_URL = os.getenv("ELASTIC_URL", "http://localhost:9200")
 ELASTIC_INDEX = os.getenv("ELASTIC_INDEX", "pcap_index")
-FAILED_LOG_FILE = "failed_ingestion.jsonl"
+METRICS_PORT = int(os.getenv("ENV_METRICS_PORT", 9100))
+FAILED_LOG = "failed_ingestion.jsonl"
 
-# Initialize Elasticsearch Client with built-in retry settings
-es = Elasticsearch(
-    ELASTIC_URL,
-    retry_on_timeout=True,
-    max_retries=3,
-    retry_on_status=[429, 502, 503, 504]
-)
+# --- Prometheus Metrics Definition (2026 Standards) ---
+PCAP_PACKETS = Counter('pcap_packets_total', 'Total packets processed', ['protocol'])
+PCAP_BYTES = Counter('pcap_bytes_total', 'Total bytes on wire', ['protocol'])
+ELASTIC_WRITE = Counter('pcap_elastic_write_total', 'Elasticsearch write status', ['status'])
+
+# Creative Metrics for Thorough Analysis
+SUSPICIOUS_TRAFFIC = Counter('pcap_suspicious_packets_total', 'Packets matching suspicious criteria', ['reason'])
+IP_VERSION_COUNT = Counter('pcap_ip_version_total', 'Count of IPv4 vs IPv6', ['version'])
+PROCESSING_TIME = Histogram('pcap_processing_seconds', 'Time spent processing packet batches')
+
+# Initialize Elastic
+es = Elasticsearch(ELASTIC_URL, retry_on_timeout=True, max_retries=2)
 
 
-def get_packet_details(pkt):
-    """Extracts addresses, protocols, and ports for IP or ARP packets."""
-    src_ip, dst_ip, proto, sport, dport = "-", "-", "Other", "-", "-"
+def get_details(pkt):
+    """Extracts protocol, IPs, ports, and metadata."""
+    proto, sport, dport, version = "Other", "-", "-", "N/A"
+    layer = None  # Initialize to avoid UnboundLocalError
 
     if pkt.haslayer(IP) or pkt.haslayer(IPv6):
-        ip_layer = pkt.getlayer(IP) or pkt.getlayer(IPv6)
-        src_ip, dst_ip = ip_layer.src, ip_layer.dst
+        layer = pkt.getlayer(IP) or pkt.getlayer(IPv6)
+        version = "v4" if pkt.haslayer(IP) else "v6"
 
-        layer_l4 = pkt.getlayer(TCP) or pkt.getlayer(UDP) or pkt.getlayer(SCTP)
-        if layer_l4:
-            proto = layer_l4.__class__.__name__
-            sport, dport = layer_l4.sport, layer_l4.dport
+        # Transport Layer Extraction
+        if pkt.haslayer(TCP):
+            proto, sport, dport = "tcp", pkt[TCP].sport, pkt[TCP].dport
+        elif pkt.haslayer(UDP):
+            proto, sport, dport = "udp", pkt[UDP].sport, pkt[UDP].dport
         elif pkt.haslayer(ICMP):
-            proto = "ICMP"
+            proto = "icmp"
+        elif pkt.haslayer(SCTP):
+            proto, sport, dport = "sctp", pkt[SCTP].sport, pkt[SCTP].dport
 
     elif pkt.haslayer(ARP):
-        arp = pkt[ARP]
-        src_ip, dst_ip = arp.psrc, arp.pdst
-        proto = f"ARP ({'Req' if arp.op == 1 else 'Reply'})"
-        sport, dport = arp.hwsrc, arp.hwdst
+        proto, version = "arp", "L2"
+        # ARP Opcode 1=Request, 2=Reply
+        proto_detail = f"arp_{'req' if pkt[ARP].op == 1 else 'reply'}"
+        return pkt[ARP].psrc, pkt[ARP].pdst, proto_detail, pkt[ARP].hwsrc, pkt[ARP].hwdst, version
 
-    return src_ip, dst_ip, proto, sport, dport
+    # Safe return: check if layer was actually assigned
+    src_ip = getattr(layer, 'src', "-") if layer else "-"
+    dst_ip = getattr(layer, 'dst', "-") if layer else "-"
 
-
-def write_to_failed_log(data):
-    """Writes failed packets to a local JSONL file for later recovery."""
-    with open(FAILED_LOG_FILE, "a") as f:
-        f.write(json.dumps(data) + "\n")
-
-
-def index_packet(doc):
-    """Attempts to write a single packet entry to Elasticsearch with manual retry logic."""
-    try:
-        es.index(index=ELASTIC_INDEX, document=doc)
-    except (ConnectionError, ApiError) as e:
-        # "Retry" Logic: One manual second attempt if the built-in client retries failed
-        try:
-            print(f"[!] Primary write failed, retrying once...")
-            es.index(index=ELASTIC_INDEX, document=doc)
-        except Exception:
-            print(f"[CRITICAL] Retry failed. Logging to {FAILED_LOG_FILE}")
-            write_to_failed_log(doc)
+    return src_ip, dst_ip, proto, sport, dport, version
 
 
 def analyze_and_ingest(file_path):
-    print(f"[*] Starting ingestion for {file_path} into {ELASTIC_INDEX}...")
+    print(f"[*] Analyzing {file_path}...")
 
-    try:
-        with PcapReader(file_path) as pcap_stream:
-            for idx, pkt in enumerate(pcap_stream, start=1):
-                # 1. Extraction
-                ts = datetime.fromtimestamp(float(pkt.time)).isoformat()
+    with PcapReader(file_path) as pcap_stream:
+        for idx, pkt in enumerate(pcap_stream, start=1):
+            with PROCESSING_TIME.time():
+                src, dst, proto, sport, dport, ip_ver = get_details(pkt)
                 length = getattr(pkt, 'wirelen', len(pkt))
-                src, dst, proto, sport, dport = get_packet_details(pkt)
 
-                # 2. Document Construction
+                # Update Prometheus Traffic Metrics
+                PCAP_PACKETS.labels(protocol=proto).inc()
+                PCAP_BYTES.labels(protocol=proto).inc(length)
+                IP_VERSION_COUNT.labels(version=ip_ver).inc()
+
+                # Creative Analysis: Flag common suspicious ports
+                if dport in [22, 23, 3389]:
+                    SUSPICIOUS_TRAFFIC.labels(reason="management_port_access").inc()
+
+                # Document for Elastic
                 doc = {
-                    "@timestamp": ts,
-                    "packet_id": idx,
-                    "src_ip": src,
-                    "dst_ip": dst,
-                    "protocol": proto,
-                    "length": length,
-                    "src_port": str(sport),
-                    "dst_port": str(dport),
-                    "file_source": os.path.basename(file_path)
+                    "@timestamp": datetime.fromtimestamp(float(pkt.time)).isoformat(),
+                    "src_ip": src, "dst_ip": dst, "protocol": proto,
+                    "length": length, "sport": str(sport), "dport": str(dport)
                 }
 
-                # 3. Indexing
-                index_packet(doc)
-
-                if idx % 100 == 0:
-                    print(f"Processed {idx} packets...")
-
-    except Exception as e:
-        print(f"Error reading PCAP: {e}")
+                # Index to Elastic with Status Tracking
+                try:
+                    es.index(index=ELASTIC_INDEX, document=doc)
+                    ELASTIC_WRITE.labels(status="success").inc()
+                except Exception:
+                    # Retry
+                    try:
+                        es.index(index=ELASTIC_INDEX, document=doc)
+                        ELASTIC_WRITE.labels(status="success").inc()
+                    except Exception:
+                        ELASTIC_WRITE.labels(status="failed").inc()
+                        with open(FAILED_LOG, "a") as f:
+                            f.write(json.dumps(doc) + "\n")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="PCAP to Elasticsearch Ingester")
-    parser.add_argument("file", help="Input .pcap file")
+    # 1. Start Prometheus Exporter
+    start_http_server(METRICS_PORT)
+    print(f"[*] Prometheus metrics at http://localhost:{METRICS_PORT}/metrics")
+
+    # 2. Parse CLI
+    parser = argparse.ArgumentParser()
+    parser.add_argument("file")
     args = parser.parse_args()
 
+    # 3. Execute
     analyze_and_ingest(args.file)
 
+    print("[*] Finished. Metrics server active for scraping. Ctrl+C to stop.")
+    while True: time.sleep(1)
