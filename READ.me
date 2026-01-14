@@ -1,0 +1,114 @@
+# PCAP to Elasticsearch + Visualization & Monitoring Stack
+
+This project ingests network packets from a `.pcap` file into Elasticsearch, exposes Prometheus metrics, and provides Kibana for visualization + Prometheus for monitoring.
+
+Current date of this setup: January 2026
+Elasticsearch & Kibana version: 8.12.0
+Python client version: 8.12.0 (pinned for compatibility)
+
+## Project Structure
+.
+├── docker-compose.yml        # Main orchestration file
+├── prometheus.yml            # Prometheus configuration
+├── Dockerfile                # Builds pcap-ingester image
+├── mycode.py                 # Main ingestion script (Scapy → Elasticsearch + metrics)
+├── traffic.pcap              # Your capture file (must exist)
+├── validate_es.py            # Simple local validation script
+├── view_es.py                # Shows last 10 packets
+├── upload_test.py            # Basic indexing test
+├── kibana-setup.py           # Creates Kibana index pattern (optional)
+└── README.md                 # This file
+
+
+
+## Quick Start (Recommended - Docker Way)
+
+```bash
+# 1. Make sure traffic.pcap exists in this folder
+# 2. Start everything
+docker compose up -d --build
+
+# Wait 30–90 seconds for services to become healthy
+
+# Useful URLs:
+http://localhost:9200           → Elasticsearch
+http://localhost:5601           → Kibana (no login)
+http://localhost:9090           → Prometheus UI
+http://localhost:9100/metrics   → Raw metrics from ingester
+
+
+First steps in Kibana after startup
+
+Open http://localhost:5601
+Go to: Stack Management → Index Patterns
+Create new index pattern: pcap_index*
+Choose @timestamp as Time field
+Go to Discover → select the pattern → explore your packets
+
+
+
+Manual / Local Execution (for development & debugging)
+Important: Do NOT run mycode.py locally while the Docker stack is running — port 9100 conflict will occur!
+Option A — Run locally (without Docker)
+
+# 1. First stop the ingester container (or whole stack)
+docker compose stop pcap-ingester
+# or
+docker compose down
+
+# 2. Make sure Elasticsearch is still running if you want
+# (or start only ES: docker compose up -d elasticsearch)
+
+# 3. Install correct client version locally
+pip install elasticsearch==8.12.0 scapy prometheus_client requests
+
+# 4. Run ingestion locally
+python3 mycode.py traffic.pcap
+# Metrics will be available on http://localhost:9100/metrics
+
+
+Option B — Avoid port conflict when developing locally
+Temporary solutions:
+
+Change port in local run:
+Modify mycode.py to use e.g. 9101 when running outside docker
+Or use environment variable override:
+
+
+ENV_METRICS_PORT=9101 python3 mycode.py traffic.pcap
+
+
+# See container status
+docker compose ps
+
+# Watch ingestion progress / errors
+docker compose logs pcap-ingester -f
+
+# Check how many documents were indexed
+curl "http://localhost:9200/pcap_index/_count?pretty"
+
+# See Prometheus targets status
+# → open http://localhost:9090/targets
+
+# Raw metrics
+curl http://localhost:9100/metrics | grep pcap
+
+# Restart only ingester (useful after changing mycode.py)
+docker compose restart pcap-ingester
+
+Known Issues & Workarounds
+Issue >>  Cause >> Workaround / Fix
+OSError: [Errno 48] Address already in use on port 9100 >> Docker container already binds port 9100 >> Don't run mycode.py locally while container is running
+BadRequestError ... compatible-with=9 >> Elasticsearch client 9.x talking to server 8.x >> Pin elasticsearch==8.12.0 in Dockerfile and local environment
+405 Method Not Allowed on /pcap_index/_doc >> Someone tried GET instead of POST on indexing endpoint >> Use POST/PUT for indexing. Browser always uses GET → don't open endpoint URL directly
+Kibana doesn't show data >>  Index pattern not created or wrong time field >> Manually create pattern pcap_index* with @timestamp or run kibana-setup.py
+Metrics show as DOWN in Prometheus >> Wrong target in prometheus.yml or network issue >> Use pcap-ingester:9100 as target (inside Docker network)
+
+
+
+Component,Version,Reason / Note
+Elasticsearch,8.12.0,"Stable, security disabled"
+Kibana,8.12.0,Matches ES version
+Python elasticsearch,8.12.0,Pinned - avoids major version mismatch
+Scapy,2.5.0,Stable & works well in slim images
+Prometheus,latest,Usually safe to use latest

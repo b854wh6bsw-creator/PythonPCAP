@@ -1,4 +1,15 @@
+global:
+  scrape_interval:     15s
+  evaluation_interval: 15s
+
 scrape_configs:
-  - job_name: 'pcap'
+  # Scrape metrics from your PCAP ingester
+  - job_name: 'pcap-ingester'
     static_configs:
       - targets: ['pcap-ingester:9100']
+    metrics_path: /metrics
+
+  # Optional: monitor prometheus itself
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']

@@ -1,21 +1,29 @@
 from elasticsearch import Elasticsearch
 
-# Fix for 400 Errors: explicitly handle verify_certs
-es = Elasticsearch("http://localhost:9200", verify_certs=False)
-INDEX_NAME = "pcap_index"
+# Use localhost for your Mac/PC terminal
+es = Elasticsearch(
+    "http://localhost:9200",
+    meta_header=False,
+    verify_certs=False
+)
 
-def validate_index():
+# FORCE THE HEADER MANUALLY
+es.transport._accept_header = "application/vnd.elasticsearch+json; compatible-with=8"
+
+
+def validate():
     try:
-        if not es.indices.exists(index=INDEX_NAME):
-            print(f"[-] Index {INDEX_NAME} not found.")
-            return
-        res = es.count(index=INDEX_NAME)
-        print(f"[+] Total documents: {res['count']}")
-        sample = es.search(index=INDEX_NAME, size=1)
-        if sample['hits']['total']['value'] > 0:
-            print("[+] Sample:", sample['hits']['hits'][0]['_source'])
+        res = es.info()
+        print(f"[+] Success! Connected to cluster: {res['cluster_name']}")
+
+        if es.indices.exists(index="pcap_index"):
+            count = es.count(index="pcap_index")['count']
+            print(f"[+] Total packets in index: {count}")
+        else:
+            print("[-] Index 'pcap_index' not found.")
     except Exception as e:
-        print(f"[-] Validation Error: {e}")
+        print(f"[-] Connection failed despite force-compat: {e}")
+
 
 if __name__ == "__main__":
-    validate_index()
+    validate()

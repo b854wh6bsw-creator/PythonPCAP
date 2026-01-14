@@ -1,20 +1,17 @@
 import requests
 import json
+import time
 
-KIBANA_URL = "http://localhost:5601/api/saved_objects/index-pattern/pcap-pattern"
+KIB_URL = "http://localhost:5601/api/saved_objects/index-pattern/pcap-pattern"
 headers = {"kbn-xsrf": "true", "Content-Type": "application/json"}
-payload = {
-    "attributes": {
-        "title": "pcap_index",
-        "timeFieldName": "@timestamp"
-    }
-}
+payload = {"attributes": {"title": "pcap_index", "timeFieldName": "@timestamp"}}
 
-try:
-    response = requests.post(KIBANA_URL, headers=headers, data=json.dumps(payload))
-    if response.status_code == 200:
-        print("[+] Kibana Index Pattern created successfully!")
-    else:
-        print(f"[-] Failed: {response.text}")
-except Exception as e:
-    print(f"[-] Error: {e}")
+print("[*] Configuring Kibana index patterns...")
+for _ in range(10):
+    try:
+        r = requests.post(KIB_URL, headers=headers, json=payload)
+        if r.status_code == 200:
+            print("[+] Success: Kibana is ready for searching.")
+            break
+    except:
+        time.sleep(10)
