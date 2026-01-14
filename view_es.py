@@ -6,7 +6,7 @@ es = Elasticsearch("http://localhost:9200")
 response = es.search(
     index="pcap_index",
     query={"match_all": {}},
-    size=200,
+    size=50,
     sort=[{"@timestamp": "desc"}]
 )
 

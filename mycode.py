@@ -59,7 +59,6 @@ def get_details(pkt):
 
     return src_ip, dst_ip, proto, sport, dport, version
 
-
 def analyze_and_ingest(file_path):
     print(f"[*] Analyzing {file_path}...")
 
