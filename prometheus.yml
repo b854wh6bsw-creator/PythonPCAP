@@ -1,0 +1,4 @@
+scrape_configs:
+  - job_name: 'pcap'
+    static_configs:
+      - targets: ['pcap-ingester:9100']
